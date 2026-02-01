@@ -31,31 +31,69 @@ def format_size(size):
             return f"{size:.2f} {unit}"
         size /= 1024
 
-def list_large_files(limit=30):
+def list_large_items(limit=20):
     print("\n" + "="*50)
-    print("🔍 SCANNING DIRECTORIES FOR LARGE FILES")
+    print("🔍 SCANNING DIRECTORIES FOR LARGE ITEMS")
     print("="*50)
     
-    files = []
+    all_files = []
+    dir_sizes = {}
+    
     for source in SOURCE_DIRS:
         if not os.path.exists(source):
             continue
         print(f"Scanning: {source}...")
         for root, dirs, filenames in os.walk(source):
+            current_dir_size = 0
             for f in filenames:
                 file_path = os.path.join(root, f)
                 size = get_file_size(file_path)
-                if size > 1024 * 1024: # Only list files > 1MB for clarity
-                    files.append((file_path, size))
+                if size > 1024 * 1024: # Only track files > 1MB
+                    all_files.append((file_path, size))
+                current_dir_size += size
+            
+            # Accumulate size for current dir and all parents up to 'source'
+            temp_path = root
+            while True:
+                dir_sizes[temp_path] = dir_sizes.get(temp_path, 0) + current_dir_size
+                if temp_path == source or temp_path == os.path.dirname(source):
+                    break
+                temp_path = os.path.dirname(temp_path)
     
-    # Sort by size descending
-    files.sort(key=lambda x: x[1], reverse=True)
+    # Sort files
+    all_files.sort(key=lambda x: x[1], reverse=True)
     
-    print(f"\nTop {limit} largest files found:")
-    for i, (path, size) in enumerate(files[:limit], 1):
-        print(f"{i:2d}. [{format_size(size):>10}] {path}")
+    # Sort all directories by size
+    raw_sorted_dirs = sorted(
+        [(d, s) for d, s in dir_sizes.items() if any(d.startswith(src) and d != src for src in SOURCE_DIRS)],
+        key=lambda x: x[1],
+        reverse=True
+    )
     
-    return files[:limit]
+    # Deduplicate: If a parent is already in the list, skip its children
+    # This avoids listing A, A/B, A/B/C separately when they are all "large"
+    deduped_dirs = []
+    for d_path, d_size in raw_sorted_dirs:
+        # Check if any parent of d_path is already in deduped_dirs
+        is_redundant = False
+        for existing_path, _ in deduped_dirs:
+            if d_path.startswith(existing_path + os.sep) or d_path == existing_path:
+                is_redundant = True
+                break
+        if not is_redundant:
+            deduped_dirs.append((d_path, d_size))
+        if len(deduped_dirs) >= limit:
+            break
+    
+    print(f"\n🔝 TOP {limit} LARGEST FILES:")
+    for i, (path, size) in enumerate(all_files[:limit], 1):
+        print(f"F{i:02d}. [{format_size(size):>10}] {path}")
+        
+    print(f"\n📂 TOP {limit} LARGEST DIRECTORIES (Deduplicated):")
+    for i, (path, size) in enumerate(deduped_dirs, 1):
+        print(f"D{i:02d}. [{format_size(size):>10}] {path}")
+    
+    return all_files[:limit], deduped_dirs
 
 def is_mounted():
     return os.path.ismount(MOUNT_POINT)
@@ -143,76 +181,87 @@ def backup_incremental():
     print("\n✅ Backup finished successfully!")
     return True
 
-def pre_backup_cleanup(scanned_files):
-    """Allows user to delete files BEFORE backup starts."""
+def pre_backup_cleanup(scanned_files, scanned_dirs):
+    """Allows user to delete files or directories BEFORE backup starts."""
     current_files = list(scanned_files)
+    current_dirs = list(scanned_dirs)
     
     while True:
-        if not current_files:
-            print("\n✅ All listed files have been processed or deleted.")
+        if not current_files and not current_dirs:
+            print("\n✅ All listed items have been processed or deleted.")
             break
-
-        print("\n" + "="*50)
-        print("📋 CURRENT LARGE FILES LIST")
-        print("="*50)
-        for i, (path, size) in enumerate(current_files, 1):
-            print(f"{i:2d}. [{format_size(size):>10}] {path}")
 
         print("\n" + "-"*30)
         print("🗑️  PRE-BACKUP CLEANUP")
         print("Commands:")
-        print("1. Enter numbers (e.g., 1, 2, 5) to delete specific files.")
-        print("2. Enter extension (e.g., .dmg, .iso) to delete all matching files.")
-        print("3. Enter 'done' to proceed to backup.")
+        print("1. Enter file numbers with 'F' (e.g., F01, F02) to delete files.")
+        print("2. Enter dir numbers with 'D' (e.g., D01, D02) to delete directories.")
+        print("3. Enter extension (e.g., .dmg) to delete matching files.")
+        print("4. Enter 'list' to see everything again.")
+        print("5. Enter 'done' to proceed to backup.")
         print("-"*30)
         
         cmd = input("Command: ").strip().lower()
         
         if cmd == 'done':
             break
+        elif cmd == 'list':
+            print(f"\n🔝 CURRENT LARGE FILES:")
+            for i, (path, size) in enumerate(current_files, 1):
+                print(f"F{i:02d}. [{format_size(size):>10}] {path}")
+            print(f"\n📂 CURRENT LARGE DIRECTORIES:")
+            for i, (path, size) in enumerate(current_dirs, 1):
+                print(f"D{i:02d}. [{format_size(size):>10}] {path}")
+            continue
         
-        valid_indices = []
+        to_delete = []
         
-        # Check if it's an extension command
         if cmd.startswith('.'):
-            valid_indices = [i for i, (path, size) in enumerate(current_files) if path.lower().endswith(cmd)]
-            if not valid_indices:
-                print(f"⚠️  No files found with extension: {cmd}")
-                continue
-        else:
+            # Extension mode
+            to_delete = [(path, size, 'file', i) for i, (path, size) in enumerate(current_files) if path.lower().endswith(cmd)]
+        elif cmd.startswith('f'):
+            # File mode
             try:
-                # Handle multiple indices like "1, 2, 3"
-                indices = [int(i.strip()) - 1 for i in cmd.replace(',', ' ').split()]
-                valid_indices = [i for i in indices if 0 <= i < len(current_files)]
-            except ValueError:
-                print("Invalid input. Please enter numbers, extension (e.g. .dmg), or 'done'.")
-                continue
+                indices = [int(i.strip()[1:]) - 1 for i in cmd.replace(',', ' ').split() if i.strip().startswith('f')]
+                to_delete = [(current_files[i][0], current_files[i][1], 'file', i) for i in indices if 0 <= i < len(current_files)]
+            except: pass
+        elif cmd.startswith('d'):
+            # Directory mode
+            try:
+                indices = [int(i.strip()[1:]) - 1 for i in cmd.replace(',', ' ').split() if i.strip().startswith('d')]
+                to_delete = [(current_dirs[i][0], current_dirs[i][1], 'dir', i) for i in indices if 0 <= i < len(current_dirs)]
+            except: pass
             
-        if not valid_indices:
-            print("⚠️  No valid files selected.")
+        if not to_delete:
+            print("⚠️  Invalid input or item not found. Use F01 for files, D01 for dirs.")
             continue
             
-        print(f"\n⚠️  Targeting {len(valid_indices)} files for immediate deletion:")
-        for i in valid_indices:
-            print(f"   - {current_files[i][0]}")
+        print(f"\n⚠️  Targeting {len(to_delete)} items for IMMEDIATE deletion:")
+        for path, size, _, _ in to_delete:
+            print(f"   - [{format_size(size):>10}] {path}")
         
-        confirm = input("\nConfirm deletion? (Type 'YES' to delete): ")
+        confirm = input("\nConfirm deletion? (Type 'YES'): ")
         if confirm == 'YES':
-            # Sort indices in reverse to avoid index shifting during removal
-            for i in sorted(valid_indices, reverse=True):
-                path, size = current_files[i]
-                try:
-                    if os.path.isfile(path) or os.path.islink(path):
-                        os.remove(path)
-                    elif os.path.isdir(path):
-                        shutil.rmtree(path)
-                    print(f"✅ Deleted: {path}")
-                    current_files.pop(i) # Remove from our local list
-                except Exception as e:
-                    print(f"❌ Error deleting {path}: {e}")
-        else:
-            print("Deletion cancelled.")
-
+            # Sort to_delete by index in reverse to pop correctly
+            # We process files and dirs separately to maintain list integrity
+            file_back_indices = sorted([item[3] for item in to_delete if item[2] == 'file'], reverse=True)
+            dir_back_indices = sorted([item[3] for item in to_delete if item[2] == 'dir'], reverse=True)
+            
+            for f_idx in file_back_indices:
+                path = current_files[f_idx][0]
+                if os.path.exists(path):
+                    if os.path.isfile(path): os.remove(path)
+                    elif os.path.isdir(path): shutil.rmtree(path)
+                    print(f"✅ Deleted File: {path}")
+                current_files.pop(f_idx)
+                
+            for d_idx in dir_back_indices:
+                path = current_dirs[d_idx][0]
+                if os.path.exists(path):
+                    shutil.rmtree(path)
+                    print(f"✅ Deleted Directory: {path}")
+                current_dirs.pop(d_idx)
+    
     return current_files
 
 def cleanup_files(remaining_files):
@@ -223,53 +272,38 @@ def cleanup_files(remaining_files):
     print("\n" + "="*50)
     print("🧹 POST-BACKUP CLEANUP")
     print("="*50)
-    print("The following files have been backed up to WebDAV. Do you want to remove them from your Mac to free space?")
+    print("The following items have been backed up. Remove them from Mac?")
     
     for i, (path, size) in enumerate(remaining_files, 1):
         print(f"{i:2d}. [{format_size(size):>10}] {path}")
         
-    print("\nOptions:")
-    print("1. Delete specific files (enter numbers)")
-    print("2. Delete ALL listed files")
-    print("3. Skip")
-    
-    choice = input("\nSelect option (1-3): ")
+    choice = input("\nOptions: 1. Delete specific (F01, F02...) | 2. Delete ALL | 3. Skip: ")
     
     to_delete = []
     if choice == '1':
-        idx_str = input("Enter numbers (e.g. 1, 2, 5): ")
-        try:
-            indices = [int(i.strip()) - 1 for i in idx_str.replace(',', ' ').split()]
-            to_delete = [remaining_files[i] for i in indices if 0 <= i < len(remaining_files)]
-        except:
-            print("Invalid input.")
+        idx_str = input("Enter numbers (F01...): ").lower()
+        indices = [int(i.strip()[1:]) - 1 for i in idx_str.replace(',', ' ').split() if i.strip().startswith('f')]
+        to_delete = [remaining_files[i] for i in indices if 0 <= i < len(remaining_files)]
     elif choice == '2':
         to_delete = remaining_files
     
     if to_delete:
-        print(f"\n⚠️  Ready to delete {len(to_delete)} files.")
-        if input("Confirm? (Type 'YES'): ") == 'YES':
+        if input(f"Confirm deleting {len(to_delete)} items? (YES): ") == 'YES':
             for path, _ in to_delete:
-                try:
-                    if os.path.isfile(path) or os.path.islink(path): os.remove(path)
+                if os.path.exists(path):
+                    if os.path.isfile(path): os.remove(path)
                     elif os.path.isdir(path): shutil.rmtree(path)
                     print(f"✅ Deleted: {path}")
-                except Exception as e:
-                    print(f"❌ Error: {e}")
 
 def main():
-    large_files = list_large_files()
-    if not large_files:
-        print("No large files found to manage.")
-        # We can still offer backup of the whole directories
+    large_files, large_dirs = list_large_items()
     
-    # New Step: Pre-backup cleanup
-    remaining_files = pre_backup_cleanup(large_files)
+    # New Step: Pre-backup cleanup supporting both files and dirs
+    remaining_files = pre_backup_cleanup(large_files, large_dirs)
     
     do_backup = input("\nProceed with incremental backup to WebDAV? (y/n): ")
     if do_backup.lower() == 'y':
         if backup_incremental():
-            # After backup, offer to delete the files that were moved
             cleanup_files(remaining_files)
     else:
         print("Process ended.")
