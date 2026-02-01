@@ -191,46 +191,65 @@ def pre_backup_cleanup(scanned_files, scanned_dirs):
             print("\n✅ All listed items have been processed or deleted.")
             break
 
+        # Automatically show the items at each step
+        print("\n" + "="*50)
+        print("📋 CURRENT LARGE ITEMS (Pre-Backup)")
+        print("="*50)
+        print(f"🔝 FILES:")
+        for i, (path, size) in enumerate(current_files, 1):
+            print(f"F{i:02d}. [{format_size(size):>10}] {path}")
+            
+        print(f"\n📂 DIRECTORIES:")
+        for i, (path, size) in enumerate(current_dirs, 1):
+            print(f"D{i:02d}. [{format_size(size):>10}] {path}")
+
         print("\n" + "-"*30)
         print("🗑️  PRE-BACKUP CLEANUP")
         print("Commands:")
         print("1. Enter file numbers with 'F' (e.g., F01, F02) to delete files.")
         print("2. Enter dir numbers with 'D' (e.g., D01, D02) to delete directories.")
         print("3. Enter extension (e.g., .dmg) to delete matching files.")
-        print("4. Enter 'list' to see everything again.")
-        print("5. Enter 'done' to proceed to backup.")
+        print("4. Enter 'done' to proceed to backup.")
         print("-"*30)
         
         cmd = input("Command: ").strip().lower()
         
         if cmd == 'done':
             break
-        elif cmd == 'list':
-            print(f"\n🔝 CURRENT LARGE FILES:")
-            for i, (path, size) in enumerate(current_files, 1):
-                print(f"F{i:02d}. [{format_size(size):>10}] {path}")
-            print(f"\n📂 CURRENT LARGE DIRECTORIES:")
-            for i, (path, size) in enumerate(current_dirs, 1):
-                print(f"D{i:02d}. [{format_size(size):>10}] {path}")
-            continue
         
         to_delete = []
         
         if cmd.startswith('.'):
             # Extension mode
             to_delete = [(path, size, 'file', i) for i, (path, size) in enumerate(current_files) if path.lower().endswith(cmd)]
-        elif cmd.startswith('f'):
-            # File mode
-            try:
-                indices = [int(i.strip()[1:]) - 1 for i in cmd.replace(',', ' ').split() if i.strip().startswith('f')]
-                to_delete = [(current_files[i][0], current_files[i][1], 'file', i) for i in indices if 0 <= i < len(current_files)]
-            except: pass
-        elif cmd.startswith('d'):
-            # Directory mode
-            try:
-                indices = [int(i.strip()[1:]) - 1 for i in cmd.replace(',', ' ').split() if i.strip().startswith('d')]
-                to_delete = [(current_dirs[i][0], current_dirs[i][1], 'dir', i) for i in indices if 0 <= i < len(current_dirs)]
-            except: pass
+        else:
+            # New improved parser for single numbers and ranges (e.g., F01, F05-F10)
+            tokens = cmd.replace(',', ' ').split()
+            for token in tokens:
+                token = token.strip()
+                if not token: continue
+                
+                prefix = token[0]
+                if prefix not in ['f', 'd']: continue
+                
+                try:
+                    num_part = token[1:]
+                    if '-' in num_part:
+                        start_str, end_str = num_part.split('-')
+                        # Handle cases like D05-D10 or D05-10
+                        start = int(start_str.strip('fd'))
+                        end = int(end_str.strip('fd'))
+                        indices = range(start - 1, end)
+                    else:
+                        indices = [int(num_part) - 1]
+                    
+                    for idx in indices:
+                        if prefix == 'f' and 0 <= idx < len(current_files):
+                            to_delete.append((current_files[idx][0], current_files[idx][1], 'file', idx))
+                        elif prefix == 'd' and 0 <= idx < len(current_dirs):
+                            to_delete.append((current_dirs[idx][0], current_dirs[idx][1], 'dir', idx))
+                except:
+                    continue
             
         if not to_delete:
             print("⚠️  Invalid input or item not found. Use F01 for files, D01 for dirs.")
