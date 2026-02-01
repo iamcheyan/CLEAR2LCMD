@@ -3,6 +3,8 @@ import subprocess
 import shutil
 from pathlib import Path
 
+import socket
+
 # Configuration
 SOURCE_DIRS = [
     os.path.expanduser("~/Documents"),
@@ -12,8 +14,9 @@ SOURCE_DIRS = [
     os.path.expanduser("~/Music")
 ]
 
-WEBDAV_URL = "https://file.kabizhu.heiyu.space/dav/TemporaryFiles"
-MOUNT_POINT = "/Volumes/TemporaryFiles"
+WEBDAV_URL = "https://file.kabizhu.heiyu.space/dav/CloudRelay"
+MOUNT_POINT = "/Volumes/CloudRelay"
+DEVICE_NAME = socket.gethostname().split('.')[0] # e.g., "tetsuya-mac"
 
 def get_file_size(path):
     try:
@@ -65,12 +68,12 @@ def ensure_mounted():
     print(f"Trying to mount: {WEBDAV_URL}")
     
     try:
-        # On macOS, using 'open' with a dav:// or https:// URL can trigger the Finder mount dialog
-        # WebDAV needs 'davs://' for HTTPS
-        dav_url = WEBDAV_URL.replace("https://", "davs://").replace("http://", "dav://")
-        subprocess.run(["open", dav_url], check=True)
-        print("\nSent mount request to Finder.")
-        print("Please check for a login window if it appears.")
+        # Using AppleScript to mount is the most reliable way on macOS
+        # as it triggers the native "Connect to Server" dialog and handles Keychain.
+        mount_cmd = f'tell application "Finder" to mount volume "{WEBDAV_URL}"'
+        subprocess.run(["osascript", "-e", mount_cmd], check=True)
+        print("\nSent native mount request (AppleScript).")
+        print("Please check for the 'Connect to Server' dialog if it appears.")
         
         while True:
             choice = input(f"Waiting for mount at {MOUNT_POINT}... (Ready? [y]/Retry [r]/Cancel [c]): ").lower()
@@ -101,25 +104,33 @@ def backup_incremental():
         if not os.path.exists(source):
             continue
             
-        # Target directory structure: /Volumes/TemporaryFiles/MacBackup/Documents/...
-        target_base = os.path.join(MOUNT_POINT, "MacBackup")
+        # Target directory structure: /Volumes/CloudRelay/Devices/<hostname>/Documents/...
+        target_base = os.path.join(MOUNT_POINT, "Devices", DEVICE_NAME)
         if not os.path.exists(target_base):
             os.makedirs(target_base, exist_ok=True)
             
         target_dir = os.path.join(target_base, os.path.basename(source))
         print(f"\nSyncing: {source} -> {target_dir}")
         
-        # rsync flags:
-        # -a: archive (preserve permissions, timestamps, etc.)
+        # Ultimate rsync flags for WebDAV compatibility:
+        # -r: recursive
+        # -t: preserve times (WebDAV usually supports this)
         # -v: verbose
-        # -z: compress during transfer
-        # -h: human readable numbers
-        # --progress: show progress
-        # --delete: delete files in target that are not in source (sync) - maybe NOT for backup? 
-        # User said "incremental", usually rsync -a is enough.
+        # -z: compress
+        # --inplace: write to files directly (CRITICAL for WebDAV)
+        # --size-only: skip checksums, rely on size and time (faster on network)
+        # --exclude: strictly ignore macOS noise
         
         try:
-            cmd = ["rsync", "-avzh", "--progress", source + "/", target_dir]
+            cmd = [
+                "rsync", "-rtvz", "--inplace", "--size-only", "--progress",
+                "--exclude", ".DS_Store",
+                "--exclude", "._*",
+                "--exclude", ".localized",
+                "--exclude", ".TemporaryItems",
+                "--exclude", ".Trashes",
+                source + "/", target_dir
+            ]
             subprocess.run(cmd, check=True)
         except subprocess.CalledProcessError as e:
             print(f"Error backing up {source}: {e}")
