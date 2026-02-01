@@ -284,35 +284,57 @@ def pre_backup_cleanup(scanned_files, scanned_dirs):
     return current_files
 
 def cleanup_files(remaining_files):
-    """Allows user to delete files AFTER backup is completed."""
+    """Summarizes backed up items and offers deletion to free space."""
     if not remaining_files:
+        print("\n✅ No specific large files were flagged for post-backup cleanup.")
         return
 
-    print("\n" + "="*50)
-    print("🧹 POST-BACKUP CLEANUP")
-    print("="*50)
-    print("The following items have been backed up. Remove them from Mac?")
+    # Group files by their source directory
+    dir_summary = {}
+    total_freed_space = 0
     
-    for i, (path, size) in enumerate(remaining_files, 1):
-        print(f"{i:2d}. [{format_size(size):>10}] {path}")
+    for path, size in remaining_files:
+        # Find which source dir this file belongs to
+        found_src = "Other"
+        for src in SOURCE_DIRS:
+            if path.startswith(src):
+                found_src = src
+                break
         
-    choice = input("\nOptions: 1. Delete specific (F01, F02...) | 2. Delete ALL | 3. Skip: ")
+        dir_summary[found_src] = dir_summary.get(found_src, 0) + size
+        total_freed_space += size
+
+    print("\n" + "="*50)
+    print("🧹 POST-BACKUP SPACE SAVING SUMMARY")
+    print("="*50)
+    print("The following large files have been successfully backed up to CloudRelay.")
+    print("You can now safely remove them from your Mac to free up space:\n")
+
+    for src_path, size in dir_summary.items():
+        # Display folder name (e.g., Downloads) and its removable size
+        folder_name = os.path.basename(src_path) if src_path != "Other" else "Other Items"
+        print(f"📁 {folder_name:<15} : {format_size(size):>10} can be freed")
+
+    print("-" * 50)
+    print(f"🚀 TOTAL POTENTIAL SAVINGS: {format_size(total_freed_space)}")
+    print("=" * 50)
     
-    to_delete = []
-    if choice == '1':
-        idx_str = input("Enter numbers (F01...): ").lower()
-        indices = [int(i.strip()[1:]) - 1 for i in idx_str.replace(',', ' ').split() if i.strip().startswith('f')]
-        to_delete = [remaining_files[i] for i in indices if 0 <= i < len(remaining_files)]
-    elif choice == '2':
-        to_delete = remaining_files
+    confirm = input("\nDo you want to delete ALL these backed-up files from your Mac? (Type 'YES'): ")
     
-    if to_delete:
-        if input(f"Confirm deleting {len(to_delete)} items? (YES): ") == 'YES':
-            for path, _ in to_delete:
-                if os.path.exists(path):
+    if confirm == 'YES':
+        deleted_count = 0
+        for path, _ in remaining_files:
+            if os.path.exists(path):
+                try:
                     if os.path.isfile(path): os.remove(path)
                     elif os.path.isdir(path): shutil.rmtree(path)
-                    print(f"✅ Deleted: {path}")
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"❌ Error deleting {path}: {e}")
+        
+        print(f"\n✅ Cleanup complete! Deleted {deleted_count} items. Mac is now {format_size(total_freed_space)} lighter.")
+    else:
+        print("Cleanup skipped. Your files remain on your Mac.")
 
 def main():
     large_files, large_dirs = list_large_items()
