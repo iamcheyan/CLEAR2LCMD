@@ -44,6 +44,9 @@ def list_large_items(limit=20):
             continue
         print(f"Scanning: {source}...")
         for root, dirs, filenames in os.walk(source):
+            # Prune unwanted directories from scan
+            dirs[:] = [d for d in dirs if d not in [".git", "venv", ".venv", "node_modules", "__pycache__", "build", "dist"]]
+            
             current_dir_size = 0
             for f in filenames:
                 file_path = os.path.join(root, f)
@@ -164,6 +167,7 @@ def backup_incremental():
                 "--exclude", ".localized",
                 "--exclude", ".TemporaryItems",
                 "--exclude", ".Trashes",
+                "--exclude", ".git",           # Git history (can be massive)
                 "--exclude", "venv",           # Python Virtual Environments
                 "--exclude", ".venv",
                 "--exclude", "node_modules",   # JS Dependencies
