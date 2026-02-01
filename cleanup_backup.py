@@ -113,13 +113,10 @@ def backup_incremental():
         print(f"\nSyncing: {source} -> {target_dir}")
         
         # Ultimate rsync flags for WebDAV compatibility:
-        # -r: recursive
-        # -t: preserve times (WebDAV usually supports this)
-        # -v: verbose
-        # -z: compress
+        # -r: recursive, -t: preserve times, -v: verbose, -z: compress
         # --inplace: write to files directly (CRITICAL for WebDAV)
         # --size-only: skip checksums, rely on size and time (faster on network)
-        # --exclude: strictly ignore macOS noise
+        # --exclude: strictly ignore macOS noise and heavy dev junk
         
         try:
             cmd = [
@@ -129,6 +126,14 @@ def backup_incremental():
                 "--exclude", ".localized",
                 "--exclude", ".TemporaryItems",
                 "--exclude", ".Trashes",
+                "--exclude", "venv",           # Python Virtual Environments
+                "--exclude", ".venv",
+                "--exclude", "node_modules",   # JS Dependencies
+                "--exclude", "__pycache__",    # Python cache
+                "--exclude", ".cache",         # Generic cache
+                "--exclude", ".npm",           # NPM cache
+                "--exclude", "build",          # Build artifacts
+                "--exclude", "dist",
                 source + "/", target_dir
             ]
             subprocess.run(cmd, check=True)
